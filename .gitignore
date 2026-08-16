@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Generated temporary resume files
+temp_resumes/
+
+# Generated model files
+models/*.pkl
+models/*.pth
+models/*.json
+
+# Generated processed datasets
+dataset/processed/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
