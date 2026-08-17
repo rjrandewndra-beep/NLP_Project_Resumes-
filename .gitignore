@@ -13,7 +13,6 @@ temp_resumes/
 
 # Generated model files
 models/*.pkl
-models/*.pth
 models/*.json
 
 # Generated processed datasets
