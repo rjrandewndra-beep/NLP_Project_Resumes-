@@ -1,0 +1,11 @@
+{
+  "model": "TF-IDF + Random Forest",
+  "train_samples": 1986,
+  "test_samples": 497,
+  "categories": 24,
+  "accuracy": 0.738430583501006,
+  "precision_weighted": 0.7573575755188304,
+  "recall_weighted": 0.738430583501006,
+  "f1_weighted": 0.7233048483555541,
+  "random_state": 42
+}

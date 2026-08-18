@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments and secrets
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary/output files
+*.tmp
+*.temp
+*.log
+~$*
+outputs/
+
+# Large optional training checkpoints (keep final required artifacts only)
+models/checkpoint-*/
+
+# The prepared dataset is about 83 MB. Keep it locally and out of normal Git commits.
+dataset/processed/*.csv
