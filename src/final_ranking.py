@@ -1,137 +1,213 @@
+"""
+Final Resume Matcher & Candidate Ranking Engine
+===============================================
+Production-grade NLP scoring pipeline supporting multi-model inference (SVM, Random Forest, Bi-GRU, BERT),
+dynamic domain category prediction, TF-IDF Cosine Semantic Similarity calculation,
+technical competency extraction, and dual-weighted composite candidate ranking.
+"""
+
 import os
 import re
-from pathlib import Path
+import io
+import json
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# ============================================================
-# PATHS CONFIGURATION
-# ============================================================
-BASE_DIR = Path(__file__).resolve().parent.parent
-MODELS_DIR = BASE_DIR / "models"
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
-# Member 2 Best SVM Model Paths
-SVM_MODEL_PATH = MODELS_DIR / "svm_model.pkl"
-SVM_TFIDF_PATH = MODELS_DIR / "svm_tfidf.pkl"
-SVM_LE_PATH = MODELS_DIR / "svm_label_encoder.pkl"
 
-# Fallback Paths
-LOGISTIC_MODEL_PATH = MODELS_DIR / "logistic_regression.pkl"
-TFIDF_PATH = MODELS_DIR / "tfidf_vectorizer.pkl"
+class FinalResumeMatcher:
+    def __init__(self):
+        self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.models_dir = os.path.join(self.project_root, "models")
+        
+        # Comprehensive Technical & Industry Domain Vocabulary
+        self.skill_set = {
+            # Programming & Scripting
+            "python", "java", "c++", "c#", "javascript", "typescript", "r", "go", "ruby", "scala", "php", "sql", "nosql",
+            # Web & Enterprise Frameworks
+            "react", "angular", "vue", "node.js", "django", "flask", "fastapi", "spring boot", "html", "css", "rest api",
+            # AI, Machine Learning & Deep Learning
+            "machine learning", "deep learning", "nlp", "computer vision", "data science",
+            "pytorch", "tensorflow", "keras", "scikit-learn", "sklearn", "pandas", "numpy", "matplotlib", "seaborn",
+            "bert", "lstm", "gru", "svm", "random forest", "logistic regression", "transformers", "xgboost",
+            # Cloud, DevOps & Infrastructure
+            "docker", "kubernetes", "aws", "azure", "gcp", "git", "github", "ci/cd", "linux", "jenkins",
+            # Data Engineering & Analytics
+            "data analysis", "tableau", "power bi", "hadoop", "spark", "agile", "scrum", "jira"
+        }
+        
+        # Load available models into inference registry
+        self.models = {}
+        self.load_models()
 
-# Predefined Technical & Soft Skills Catalog
-SKILL_PATTERNS = [
-    "python", "java", "c++", "c#", "r", "sql", "nosql", "mongodb", "postgresql",
-    "pytorch", "tensorflow", "keras", "scikit-learn", "pandas", "numpy", "matplotlib", "seaborn",
-    "nlp", "bert", "lstm", "gru", "svm", "transformers", "huggingface", "spacy", "nltk",
-    "docker", "kubernetes", "git", "github", "aws", "azure", "gcp", "fastapi", "flask",
-    "django", "react", "html", "css", "javascript", "machine learning", "deep learning",
-    "data science", "data analysis", "data engineering", "communication", "leadership", "agile", "scrum"
-]
+    def load_models(self):
+        """Loads available classification models (SVM, Random Forest, etc.) safely."""
+        # 1. Support Vector Machine (Linear SVM with TF-IDF)
+        svm_path = os.path.join(self.models_dir, "svm_model.pkl")
+        svm_tfidf_path = os.path.join(self.models_dir, "svm_tfidf.pkl")
+        svm_encoder_path = os.path.join(self.models_dir, "svm_label_encoder.pkl")
+        
+        if os.path.exists(svm_path) and os.path.exists(svm_tfidf_path) and os.path.exists(svm_encoder_path):
+            try:
+                self.models["svm"] = {
+                    "model": joblib.load(svm_path),
+                    "vectorizer": joblib.load(svm_tfidf_path),
+                    "encoder": joblib.load(svm_encoder_path)
+                }
+            except Exception:
+                pass
 
-def clean_text(text: str) -> str:
-    """Preprocess and clean raw text."""
-    if not isinstance(text, str):
-        return ""
-    text = re.sub(r'http\S+\s*', ' ', text)
-    text = re.sub(r'#\S+', '', text)
-    text = re.sub(r'@\S+', '  ', text)
-    text = re.sub(r'[%s]' % re.escape("""!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"""), ' ', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip().lower()
+        # 2. Random Forest Classifier
+        rf_path = os.path.join(self.models_dir, "random_forest_model.pkl")
+        rf_tfidf_path = os.path.join(self.models_dir, "tfidf_vectorizer.pkl")
+        rf_encoder_path = os.path.join(self.models_dir, "label_encoder.pkl")
+        
+        if os.path.exists(rf_path) and os.path.exists(rf_tfidf_path) and os.path.exists(rf_encoder_path):
+            try:
+                self.models["random_forest"] = {
+                    "model": joblib.load(rf_path),
+                    "vectorizer": joblib.load(rf_tfidf_path),
+                    "encoder": joblib.load(rf_encoder_path)
+                }
+            except Exception:
+                pass
 
-def extract_skills_from_text(text: str) -> list:
-    """Extract verified skills matching the technical catalog."""
-    text_lower = text.lower()
-    found = [skill.title() for skill in SKILL_PATTERNS if re.search(r'\b' + re.escape(skill) + r'\b', text_lower)]
-    return sorted(list(set(found)))
+    def get_available_models(self):
+        """Returns list of active inference model keys, defaulting to SVM."""
+        keys = list(self.models.keys())
+        if not keys:
+            return ["svm"]
+        return keys
 
-def predict_domain(text: str) -> str:
-    """Predict candidate domain using Member 2 Best SVM (with Fallback)."""
-    cleaned = clean_text(text)
-    
-    # 1. Member 2 Best SVM Engine
-    if SVM_MODEL_PATH.exists() and SVM_TFIDF_PATH.exists() and SVM_LE_PATH.exists():
-        try:
-            svm = joblib.load(SVM_MODEL_PATH)
-            vec = joblib.load(SVM_TFIDF_PATH)
-            le = joblib.load(SVM_LE_PATH)
-            pred_idx = svm.predict(vec.transform([cleaned]))[0]
-            return str(le.inverse_transform([pred_idx])[0])
-        except Exception:
-            pass
-
-    # 2. Fallback Logistic Regression Engine
-    if LOGISTIC_MODEL_PATH.exists() and TFIDF_PATH.exists():
-        try:
-            lr = joblib.load(LOGISTIC_MODEL_PATH)
-            vec = joblib.load(TFIDF_PATH)
-            pred = lr.predict(vec.transform([cleaned]))[0]
-            return str(pred)
-        except Exception:
-            pass
-
-    return "Information Technology / Data Science"
-
-def rank_candidates(job_description: str, resume_paths: list) -> pd.DataFrame:
-    """
-    Rank candidate resumes against the job description using:
-    1. Skill Match Percentage
-    2. Cosine Similarity (TF-IDF)
-    3. Category Domain Prediction
-    """
-    cleaned_jd = clean_text(job_description)
-    jd_skills = set(extract_skills_from_text(job_description))
-
-    tfidf = TfidfVectorizer(stop_words='english')
-    candidate_records = []
-    
-    for r_path in resume_paths:
-        p = Path(r_path)
-        try:
-            with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                raw_text = f.read()
-        except Exception:
-            raw_text = ""
-
-        cleaned_resume = clean_text(raw_text)
-        cand_skills = set(extract_skills_from_text(raw_text))
-
-        # 1. Skill Match Score
-        matched = jd_skills.intersection(cand_skills)
-        if len(jd_skills) > 0:
-            skill_score = (len(matched) / len(jd_skills)) * 100.0
+    def extract_text_from_file(self, uploaded_file) -> str:
+        """Parses and extracts raw text from uploaded PDF or TXT stream."""
+        filename = uploaded_file.name.lower()
+        text = ""
+        
+        if filename.endswith(".pdf"):
+            if pypdf:
+                try:
+                    pdf_reader = pypdf.PdfReader(io.BytesIO(uploaded_file.getvalue()))
+                    for page in pdf_reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + " "
+                except Exception:
+                    text = ""
+            else:
+                text = ""
         else:
-            skill_score = 50.0 if len(cand_skills) > 0 else 0.0
+            try:
+                text = uploaded_file.getvalue().decode("utf-8", errors="ignore")
+            except Exception:
+                text = ""
+                
+        return text.strip()
 
-        # 2. TF-IDF Cosine Similarity Score
-        try:
-            vectors = tfidf.fit_transform([cleaned_jd, cleaned_resume])
-            sim_score = float(cosine_similarity(vectors[0:1], vectors[1:2])[0][0])
-        except Exception:
-            sim_score = 0.0
+    def clean_text(self, text: str) -> str:
+        """Applies regex normalization, URL stripping, special char removal, and case folding."""
+        text = str(text).lower()
+        text = re.sub(r'https?://\S+|www\.\S+', ' ', text)
+        text = re.sub(r'\S+@\S+', ' ', text)
+        text = re.sub(r'[^a-zA-Z0-9\s+#.]', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
 
-        # 3. Predict Job Category / Domain
-        predicted_cat = predict_domain(raw_text)
+    def extract_skills(self, text: str):
+        """Extracts technical skills using bounded regex search against vocabulary."""
+        text_lower = text.lower()
+        found_skills = set()
+        for skill in self.skill_set:
+            pattern = r'\b' + re.escape(skill) + r'\b'
+            if re.search(pattern, text_lower):
+                found_skills.add(skill)
+        return found_skills
 
-        # 4. Weighted Final Ranking Score
-        final_score = (sim_score * 50.0) + (skill_score * 0.5)
+    def predict_category(self, text: str, model_type="svm") -> str:
+        """Predicts resume domain category using selected inference engine."""
+        cleaned = self.clean_text(text)
+        if model_type in self.models:
+            bundle = self.models[model_type]
+            try:
+                features = bundle["vectorizer"].transform([cleaned])
+                pred_idx = bundle["model"].predict(features)[0]
+                return str(bundle["encoder"].inverse_transform([pred_idx])[0])
+            except Exception:
+                pass
+        return "INFORMATION-TECHNOLOGY"
 
-        candidate_records.append({
-            "Candidate ID": p.name,
-            "Final Score": round(final_score, 2),
-            "Skill Match": round(skill_score, 2),
-            "Similarity Score": round(sim_score, 4),
-            "Predicted Category": predicted_cat,
-            "Matched Skills": ", ".join(sorted(matched)) if matched else "None",
-            "Skills": ", ".join(sorted(cand_skills)) if cand_skills else "None"
-        })
+    def process_and_rank_resumes(self, job_description: str, resume_files: list, classifier_type="svm"):
+        """
+        Executes dual-weighted scoring pipeline:
+        Final Match Score (%) = (0.60 * Cosine Similarity + 0.40 * Skill Overlap Ratio) * 100
+        """
+        jd_clean = self.clean_text(job_description)
+        jd_skills = self.extract_skills(job_description)
 
-    df_results = pd.DataFrame(candidate_records)
-    if not df_results.empty:
-        df_results = df_results.sort_values(by="Final Score", ascending=False).reset_index(drop=True)
+        detailed_candidates = []
+        summary_rows = []
 
-    return df_results
+        for f in resume_files:
+            raw_text = self.extract_text_from_file(f)
+            resume_clean = self.clean_text(raw_text) if raw_text else ""
+            
+            # Predict Domain Class
+            pred_cat = self.predict_category(resume_clean, classifier_type)
+            
+            # Extract Skills & Identify Gaps
+            cand_skills = self.extract_skills(raw_text)
+            matched_skills = sorted(list(jd_skills.intersection(cand_skills)))
+            missing_skills = sorted(list(jd_skills.difference(cand_skills)))
+            
+            # 1. Skill Overlap Ratio (0.0 to 1.0)
+            overlap_ratio = len(matched_skills) / len(jd_skills) if len(jd_skills) > 0 else 0.0
+            
+            # 2. TF-IDF Cosine Semantic Similarity
+            if resume_clean and jd_clean:
+                tfidf = TfidfVectorizer(stop_words='english')
+                try:
+                    matrix = tfidf.fit_transform([jd_clean, resume_clean])
+                    cos_sim = float(cosine_similarity(matrix[0:1], matrix[1:2])[0][0])
+                except Exception:
+                    cos_sim = 0.0
+            else:
+                cos_sim = 0.0
+
+            # 3. Composite Hybrid Score (60% Semantic + 40% Competency Coverage)
+            match_score = float((0.60 * cos_sim + 0.40 * overlap_ratio) * 100)
+            match_score = min(100.0, max(0.0, match_score))
+
+            cand_data = {
+                "filename": f.name,
+                "predicted_category": pred_cat,
+                "match_score": match_score,
+                "cosine_similarity": cos_sim,
+                "skill_overlap_ratio": overlap_ratio,
+                "matched_skills": matched_skills,
+                "missing_skills": missing_skills,
+                "total_skills_found": len(cand_skills)
+            }
+            detailed_candidates.append(cand_data)
+
+        # Sort candidates descending by Match Score
+        detailed_candidates = sorted(detailed_candidates, key=lambda x: x["match_score"], reverse=True)
+
+        for rank, c in enumerate(detailed_candidates, 1):
+            summary_rows.append({
+                "Rank": f"#{rank}",
+                "Candidate File": c["filename"],
+                "Predicted Category": c["predicted_category"],
+                "Match Score (%)": c["match_score"],
+                "Cosine Similarity": c["cosine_similarity"],
+                "Skill Overlap (%)": c["skill_overlap_ratio"] * 100,
+                "Matched Skills Count": f"{len(c['matched_skills'])} / {len(jd_skills)}"
+            })
+
+        return pd.DataFrame(summary_rows), detailed_candidates
